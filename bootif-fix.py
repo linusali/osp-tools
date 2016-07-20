@@ -23,20 +23,16 @@
 # yum install python-inotify
 
 import logging
-import sys
-import traceback
-import inotify.adapters
+import pyinotify
 
-# The strings to be replaced in the config and pxe files in /httpboot
-replace=[["--timeout 60000", ""], ["{mac", "{net0/mac"]]
+replace=[["{mac", "{net0/mac"]]
+path="/httpboot"
 
-# Folder path containing the images and pxe configs
-httpboot="/httpboot"
+wm = pyinotify.WatchManager()
+mask = pyinotify.IN_CREATE
 
 _DEFAULT_LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-
 _LOGGER = logging.getLogger(__name__)
-
 
 def _configure_logging():
     ''' Setup logging '''
@@ -61,28 +57,20 @@ def inplace_change(filename, old_string, new_string):
         s = s.replace(old_string, new_string)
         f.write(s)
 
+class EventHandler(pyinotify.ProcessEvent):
+    def process_IN_CREATE(self, event):
+        if event.pathname.endswith(".ipxe") or event.pathname.endswith("config"):
+            for r in replace:
+               inplace_change("{}".format(event.pathname), r[0], r[1])
+               
 def _main():
-    ''' Main function watching over the httpboot folder for any changes
-        in *.ipxe and config file and then immediatly replace the strings specified
-        above with the workaround ones'''
-    i = inotify.adapters.InotifyTree(httpboot)
+    for r in replace:
+       inplace_change("{}/inspector.ipxe".format(path), r[0], r[1])
+    handler = EventHandler()
+    notifier = pyinotify.Notifier(wm, handler)
+    wdd = wm.add_watch(path, mask, rec=True)
 
-    try:
-        for event in i.event_gen():
-            if event is not None:
-                (header, type_names, watch_path, filename) = event
-                if "IN_CLOSE_WRITE" in type_names:
-                    if filename.endswith(".ipxe") or filename.endswith("config"):
-                       _LOGGER.info("MASK->NAMES={}  FILENAME=[{}/{}]".format(type_names, watch_path, filename))
-                       for r in replace:
-                          inplace_change("{}/{}".format(watch_path, filename), r[0], r[1])
-    except KeyboardInterrupt:
-       _LOGGER.info("Keyboard interrupted")
-    except Exception:
-        traceback.print_exc(file=sys.stdout)
-    finally:
-        _LOGGER.info("Exiting monitor")
-    sys.exit(0)
+    notifier.loop()
 
 if __name__ == '__main__':
     _configure_logging()
